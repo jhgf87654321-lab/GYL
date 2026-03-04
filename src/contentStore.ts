@@ -52,3 +52,28 @@ export async function setContentKey(key: string, url: string): Promise<ContentMa
     return {};
   }
 }
+
+/**
+ * 将本地已有的一批 key→url 合并写入云端（用于一次性把 localStorage 中的数据迁移到数据库）。
+ */
+export async function mergeContentMap(local: ContentMap): Promise<ContentMap> {
+  const app = getApp();
+  if (!app) return local;
+
+  await ensureAuth();
+
+  const db = (app as any).database?.();
+  if (!db) return local;
+
+  try {
+    const current = await getContentMap();
+    const next: ContentMap = { ...current, ...local };
+    await db.collection(COLLECTION).doc(DOC_ID).set({ slots: next });
+    return next;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[contentStore] mergeContentMap failed:', e);
+    return local;
+  }
+}
+

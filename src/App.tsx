@@ -12,7 +12,55 @@ import {
   Dribbble
 } from 'lucide-react';
 import { uploadToCos } from './cosClient';
-import { getContentMap, setContentKey as persistContentKey, type ContentMap } from './contentStore';
+import { getContentMap, setContentKey as persistContentKey, mergeContentMap, type ContentMap } from './contentStore';
+
+// --- Admin context: only admins can see upload controls ---
+const AdminContext = createContext<{
+  isAdmin: boolean;
+  login: () => void;
+  logout: () => void;
+}>({
+  isAdmin: false,
+  login: () => {},
+  logout: () => {},
+});
+
+function AdminProvider({ children }: { children: React.ReactNode }) {
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('isAdmin') === 'true';
+  });
+
+  const login = () => {
+    if (typeof window === 'undefined') return;
+    const pwd = window.prompt('Admin password');
+    if (!pwd) return;
+    const expected = (import.meta as any).env?.VITE_ADMIN_PASSWORD as string | undefined;
+    if (expected && pwd === expected) {
+      setIsAdmin(true);
+      window.localStorage.setItem('isAdmin', 'true');
+    } else {
+      window.alert('Wrong password');
+    }
+  };
+
+  const logout = () => {
+    setIsAdmin(false);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('isAdmin');
+    }
+  };
+
+  return (
+    <AdminContext.Provider value={{ isAdmin, login, logout }}>
+      {children}
+    </AdminContext.Provider>
+  );
+}
+
+function useAdmin() {
+  return useContext(AdminContext);
+}
 
 // --- Content store context (CloudBase DB so Vercel/any device sees same media) ---
 const ContentStoreContext = createContext<{
@@ -31,8 +79,8 @@ function ContentStoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     getContentMap().then((map) => {
-      // 若云端为空，用 localStorage 做回退，并把本地数据合并进 state 以便展示
-      if (typeof window !== 'undefined' && Object.keys(map).length === 0) {
+      // 若云端为空，并且是在本地开发环境，则用 localStorage 做一次性回退并写入云端，实现「自动导入旧版本配置」。
+      if (typeof window !== 'undefined' && Object.keys(map).length === 0 && window.location.hostname === 'localhost') {
         const prefix = ['resume-url', 'brand-identity-', 'philosophy-', 'process-img-', 'art-direction-', 'motion-design-', 'concord-video-'];
         const local: ContentMap = {};
         for (let i = 0; i < window.localStorage.length; i++) {
@@ -44,8 +92,15 @@ function ContentStoreProvider({ children }: { children: React.ReactNode }) {
           }
         }
         if (Object.keys(local).length > 0) {
-          setContentMap(local);
-          setLoaded(true);
+          mergeContentMap(local)
+            .then((next) => {
+              setContentMap(next);
+              setLoaded(true);
+            })
+            .catch(() => {
+              setContentMap(local);
+              setLoaded(true);
+            });
           return;
         }
       }
@@ -74,13 +129,14 @@ function useContent() {
 // --- Components ---
 
 const Navbar = () => {
+  const { isAdmin, login, logout } = useAdmin();
   const [isOpen, setIsOpen] = useState(false);
   
   return (
     <nav className="fixed top-0 left-0 w-full z-50 px-8 py-6 flex justify-between items-center mix-blend-difference">
       <div className="font-serif text-2xl tracking-tighter font-medium text-white">fridie gu</div>
       
-      <div className="hidden md:flex gap-10 text-[11px] uppercase tracking-[0.2em] font-medium text-white/80">
+      <div className="hidden md:flex gap-10 text-[11px] uppercase tracking-[0.2em] font-medium text-white/80 items-center">
         {['Works', 'Philosophy', 'Contact'].map(item => {
           const href =
             item === 'Works'
@@ -96,6 +152,12 @@ const Navbar = () => {
             </a>
           );
         })}
+        <button
+          onClick={isAdmin ? logout : login}
+          className="text-[10px] uppercase tracking-[0.2em] border border-white/30 rounded-full px-3 py-1 hover:bg-white hover:text-black transition-colors"
+        >
+          {isAdmin ? 'Admin Logout' : 'Admin Login'}
+        </button>
       </div>
 
       <button className="md:hidden text-white" onClick={() => setIsOpen(!isOpen)}>
@@ -167,6 +229,7 @@ const Expertise = ({ onNavigate }: { onNavigate: (route: string) => void }) => {
   ];
 
   const { contentMap, setContentKey } = useContent();
+  const { isAdmin } = useAdmin();
   const resumeUrl = contentMap['resume-url'] ?? (typeof window !== 'undefined' ? window.localStorage.getItem('resume-url') : null) ?? null;
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -248,25 +311,24 @@ const Expertise = ({ onNavigate }: { onNavigate: (route: string) => void }) => {
           >
             Download Resume PDF
           </button>
-          <button
-            className="pill-button border border-serenity-text/30 bg-transparent text-serenity-text hover:bg-serenity-text hover:text-serenity-bg"
-            onClick={() => resumeInputRef.current?.click()}
-          >
-            Upload Resume PDF
-          </button>
+          {isAdmin && (
+            <button
+              className="pill-button border border-serenity-text/30 bg-transparent text-serenity-text hover:bg-serenity-text hover:text-serenity-bg"
+              onClick={() => resumeInputRef.current?.click()}
+            >
+              Upload Resume PDF
+            </button>
+          )}
         </div>
-        {resumeUrl && (
-          <span className="text-[11px] text-serenity-muted">
-            Resume uploaded. Visitors will download this file.
-          </span>
+        {isAdmin && (
+          <input
+            ref={resumeInputRef}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={handleResumeUpload}
+          />
         )}
-        <input
-          ref={resumeInputRef}
-          type="file"
-          accept="application/pdf"
-          className="hidden"
-          onChange={handleResumeUpload}
-        />
       </div>
     </section>
   );
@@ -324,33 +386,35 @@ const Philosophy = ({ onNavigate }: { onNavigate: (route: string) => void }) => 
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <label
-                  className="absolute bottom-3 right-3 z-20 cursor-pointer bg-black/70 hover:bg-black/90 text-[9px] uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/40"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  Change
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
+                {useAdmin().isAdmin && (
+                  <label
+                    className="absolute bottom-3 right-3 z-20 cursor-pointer bg-black/70 hover:bg-black/90 text-[9px] uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/40"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={async (event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      try {
-                        const { url } = await uploadToCos(file);
-                        await setContentKey(`philosophy-card-${philosophyCardBase[i].title}`, url);
-                      } catch (e) {
-                        // eslint-disable-next-line no-console
-                        console.error(e);
-                      } finally {
-                        event.target.value = '';
-                      }
-                    }}
-                  />
-                </label>
+                  >
+                    Change
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const { url } = await uploadToCos(file);
+                          await setContentKey(`philosophy-card-${philosophyCardBase[i].title}`, url);
+                        } catch (e) {
+                          // eslint-disable-next-line no-console
+                          console.error(e);
+                        } finally {
+                          event.target.value = '';
+                        }
+                      }}
+                    />
+                  </label>
+                )}
               </div>
             </div>
           ))}
@@ -480,6 +544,7 @@ type CosUploadPlaceholderProps = {
 };
 
 const CosUploadPlaceholder: React.FC<CosUploadPlaceholderProps> = ({ onUploaded, label }) => {
+  const { isAdmin } = useAdmin();
   const [status, setStatus] = useState<'idle' | 'uploading' | 'uploaded' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -499,6 +564,8 @@ const CosUploadPlaceholder: React.FC<CosUploadPlaceholderProps> = ({ onUploaded,
       setError(e instanceof Error ? e.message : 'Upload failed');
     }
   };
+
+  if (!isAdmin) return null;
 
   return (
     <div className="relative z-10 flex flex-col items-center gap-4">
@@ -579,11 +646,14 @@ const Footer = () => {
 // --- New Project Page Component ---
 
 const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { isAdmin } = useAdmin();
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
   const { contentMap, setContentKey } = useContent();
+  const heroVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [heroUnmuted, setHeroUnmuted] = useState(false);
   const brandIdentityBase = [
     { name: 'Swiss Airmen', type: 'Watch', desc: 'Black Carbon & Technical Polymer', img: null as string | null },
     { name: 'Diamond Pendant', type: 'Jewelry', desc: '18k White Gold', img: null as string | null },
@@ -595,6 +665,32 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     img: (contentMap[`brand-identity-${item.name}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`brand-identity-${item.name}`) : null)) as string | null,
   }));
   const heroVideo = contentMap['brand-identity-hero-video'] ?? (typeof window !== 'undefined' ? window.localStorage.getItem('brand-identity-hero-video') : null) ?? null;
+
+  useEffect(() => {
+    const el = heroVideoRef.current;
+    if (!el) return;
+    const seekAndPlay = async () => {
+      try {
+        // 从第 1 秒开始播放（静音，保证自动播放兼容）
+        el.currentTime = 1;
+        await el.play();
+      } catch {
+        // ignore autoplay errors
+      }
+    };
+    if (el.readyState >= 1) {
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      seekAndPlay();
+    } else {
+      const handler = () => {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        seekAndPlay();
+        el.removeEventListener('loadedmetadata', handler);
+      };
+      el.addEventListener('loadedmetadata', handler);
+      return () => el.removeEventListener('loadedmetadata', handler);
+    }
+  }, [heroVideo]);
 
   return (
     <motion.div 
@@ -618,19 +714,31 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       {/* Hero Video Section */}
       <section className="relative h-screen w-full overflow-hidden flex items-center justify-center">
         <video 
+          ref={heroVideoRef}
           autoPlay 
           loop 
-          muted 
+          muted={!heroUnmuted}
           playsInline 
           className="absolute inset-0 w-full h-full object-cover opacity-70"
           src={
             heroVideo ??
             'https://assets.mixkit.co/videos/preview/mixkit-particles-of-gold-dust-floating-in-the-air-26563-large.mp4'
           }
+          onClick={() => {
+            const el = heroVideoRef.current;
+            if (!el) return;
+            setHeroUnmuted(true);
+            if (el.paused) {
+              // eslint-disable-next-line @typescript-eslint/no-floating-promises
+              el.play().catch(() => {});
+            } else {
+              el.pause();
+            }
+          }}
         />
         
         {/* Gradient overlay to transition smoothly into the black section below */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black pointer-events-none" />
         
         <div className="absolute bottom-24 left-12 md:left-24 z-10">
           <motion.div
@@ -645,12 +753,14 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </motion.div>
         </div>
         
-        <div className="absolute bottom-10 right-10 z-10">
-          <CosUploadPlaceholder
-            label="Upload Collection Intro Video"
-            onUploaded={(url) => setContentKey('brand-identity-hero-video', url)}
-          />
-        </div>
+        {isAdmin && (
+          <div className="absolute bottom-10 right-10 z-10">
+            <CosUploadPlaceholder
+              label="Upload Collection Intro Video"
+              onUploaded={(url) => setContentKey('brand-identity-hero-video', url)}
+            />
+          </div>
+        )}
       </section>
 
       {/* PNG Showcase Section (Black Background) */}
@@ -688,33 +798,37 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         className="relative z-10 w-4/5 h-4/5 object-contain group-hover:scale-110 transition-transform duration-700"
                         referrerPolicy="no-referrer"
                       />
-                      <label className="absolute bottom-4 right-4 z-20 cursor-pointer bg-black/60 hover:bg-black/80 text-[9px] uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/30">
-                        Change
-                        <input
-                          type="file"
-                          accept="image/*,video/*"
-                          className="hidden"
-                          onChange={async (event) => {
-                            const file = event.target.files?.[0];
-                            if (!file) return;
-                            try {
-                              const { url } = await uploadToCos(file);
-                              await setContentKey(`brand-identity-${artifacts[i].name}`, url);
-                            } catch (e) {
-                              // eslint-disable-next-line no-console
-                              console.error(e);
-                            } finally {
-                              event.target.value = '';
-                            }
-                          }}
-                        />
-                      </label>
+                      {isAdmin && (
+                        <label className="absolute bottom-4 right-4 z-20 cursor-pointer bg-black/60 hover:bg-black/80 text-[9px] uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/30">
+                          Change
+                          <input
+                            type="file"
+                            accept="image/*,video/*"
+                            className="hidden"
+                            onChange={async (event) => {
+                              const file = event.target.files?.[0];
+                              if (!file) return;
+                              try {
+                                const { url } = await uploadToCos(file);
+                                await setContentKey(`brand-identity-${artifacts[i].name}`, url);
+                              } catch (e) {
+                                // eslint-disable-next-line no-console
+                                console.error(e);
+                              } finally {
+                                event.target.value = '';
+                              }
+                            }}
+                          />
+                        </label>
+                      )}
                     </>
                   ) : (
-                    <CosUploadPlaceholder
-                      label={`${item.type} PNG / Video`}
-                      onUploaded={(url) => setContentKey(`brand-identity-${artifacts[i].name}`, url)}
-                    />
+                    isAdmin ? (
+                      <CosUploadPlaceholder
+                        label={`${item.type} PNG / Video`}
+                        onUploaded={(url) => setContentKey(`brand-identity-${artifacts[i].name}`, url)}
+                      />
+                    ) : null
                   )}
                 </div>
                 
@@ -1485,6 +1599,7 @@ export default function App() {
 
   return (
     <ContentStoreProvider>
+    <AdminProvider>
     <AnimatePresence mode="wait">
       {currentRoute === 'home' ? (
         <motion.div 
@@ -1555,6 +1670,7 @@ export default function App() {
         />
       )}
     </AnimatePresence>
+    </AdminProvider>
     </ContentStoreProvider>
   );
 }
