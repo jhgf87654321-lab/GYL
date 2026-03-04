@@ -1,0 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant Garamond", serif;
+  
+  --color-serenity-bg: #0f0f0f;
+  --color-serenity-text: #f5f2ed;
+  --color-serenity-accent: #a3907d;
+  --color-serenity-muted: rgba(245, 242, 237, 0.6);
+}
+
+@layer base {
+  body {
+    @apply bg-serenity-bg text-serenity-text selection:bg-serenity-accent/30;
+    font-feature-settings: "kern", "liga", "clig", "calt";
+  }
+}
+
+@layer components {
+  .serif-display {
+    @apply font-serif italic font-light tracking-tight;
+  }
+  
+  .pill-button {
+    @apply px-8 py-3 rounded-full border border-serenity-accent/40 text-serenity-accent text-xs uppercase tracking-[0.2em] font-medium transition-all hover:bg-serenity-accent hover:text-serenity-bg;
+  }
+
+  .grid-line {
+    @apply border-serenity-text/10;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(163, 144, 125, 0.2);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(163, 144, 125, 0.4);
+}

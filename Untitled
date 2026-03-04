@@ -1,0 +1,6 @@
+# CloudBase environment region, default is ap-shanghai
+VITE_CLOUDBASE_REGION="ap-shanghai"
+
+# CloudBase Web Auth publishable key (前端可用的公开 key，不是 SecretId/SecretKey)
+# 获取方式：CloudBase 控制台 -> 环境 -> API 密钥 -> 可公开访问的 Publishable Key
+VITE_CLOUDBASE_ACCESS_KEY="your-publishable-key"
