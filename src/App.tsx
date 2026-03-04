@@ -31,6 +31,24 @@ function ContentStoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     getContentMap().then((map) => {
+      // 若云端为空，用 localStorage 做回退，并把本地数据合并进 state 以便展示
+      if (typeof window !== 'undefined' && Object.keys(map).length === 0) {
+        const prefix = ['resume-url', 'brand-identity-', 'philosophy-', 'process-img-', 'art-direction-', 'motion-design-', 'concord-video-'];
+        const local: ContentMap = {};
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const key = window.localStorage.key(i);
+          if (!key) continue;
+          if (key === prefix[0] || prefix.some((p) => p !== 'resume-url' && key.startsWith(p))) {
+            const v = window.localStorage.getItem(key);
+            if (v) local[key] = v;
+          }
+        }
+        if (Object.keys(local).length > 0) {
+          setContentMap(local);
+          setLoaded(true);
+          return;
+        }
+      }
       setContentMap(map);
       setLoaded(true);
     });

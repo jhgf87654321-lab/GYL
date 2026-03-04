@@ -19,8 +19,9 @@ export async function getContentMap(): Promise<ContentMap> {
 
   try {
     const res = await db.collection(COLLECTION).doc(DOC_ID).get();
-    const data = res?.data;
-    if (data && typeof data.slots === 'object') return data.slots as ContentMap;
+    // CloudBase .doc().get() 返回 { data: Array }，单条文档时取 data[0]
+    const raw = Array.isArray(res?.data) ? res.data[0] : res?.data;
+    if (raw && typeof raw.slots === 'object') return raw.slots as ContentMap;
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn('[contentStore] getContentMap failed:', e);
