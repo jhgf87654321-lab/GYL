@@ -50,10 +50,14 @@ const app =
       })
     : null;
 
+export function getApp() {
+  return app;
+}
+
 // 简单的匿名登录，确保有会话后再上传文件
 let authReadyPromise: Promise<void> | null = null;
 
-async function ensureAuth() {
+export async function ensureAuth() {
   if (!app) {
     throw new Error('CloudBase 未初始化，请检查 VITE_CLOUDBASE_ENV_ID / VITE_CLOUDBASE_ACCESS_KEY。');
   }

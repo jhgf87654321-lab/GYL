@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, createContext, useContext } from 'react';
 import { motion, useScroll, useTransform, AnimatePresence } from 'motion/react';
 import { 
   ArrowRight, 
@@ -12,6 +12,46 @@ import {
   Dribbble
 } from 'lucide-react';
 import { uploadToCos } from './cosClient';
+import { getContentMap, setContentKey as persistContentKey, type ContentMap } from './contentStore';
+
+// --- Content store context (CloudBase DB so Vercel/any device sees same media) ---
+const ContentStoreContext = createContext<{
+  contentMap: ContentMap;
+  setContentKey: (key: string, url: string) => Promise<void>;
+  isLoaded: boolean;
+}>({
+  contentMap: {},
+  setContentKey: async () => {},
+  isLoaded: false,
+});
+
+function ContentStoreProvider({ children }: { children: React.ReactNode }) {
+  const [contentMap, setContentMap] = useState<ContentMap>({});
+  const [isLoaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    getContentMap().then((map) => {
+      setContentMap(map);
+      setLoaded(true);
+    });
+  }, []);
+
+  const setContentKey = async (key: string, url: string) => {
+    setContentMap((prev) => ({ ...prev, [key]: url }));
+    if (typeof window !== 'undefined') window.localStorage.setItem(key, url);
+    await persistContentKey(key, url);
+  };
+
+  return (
+    <ContentStoreContext.Provider value={{ contentMap, setContentKey, isLoaded }}>
+      {children}
+    </ContentStoreContext.Provider>
+  );
+}
+
+function useContent() {
+  return useContext(ContentStoreContext);
+}
 
 // --- Components ---
 
@@ -108,11 +148,8 @@ const Expertise = ({ onNavigate }: { onNavigate: (route: string) => void }) => {
     { name: 'Motion Design', img: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2070&auto=format&fit=crop', route: 'motion-design' },
   ];
 
-  const [resumeUrl, setResumeUrl] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem('resume-url');
-  });
-
+  const { contentMap, setContentKey } = useContent();
+  const resumeUrl = contentMap['resume-url'] ?? (typeof window !== 'undefined' ? window.localStorage.getItem('resume-url') : null) ?? null;
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleResumeUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,10 +158,7 @@ const Expertise = ({ onNavigate }: { onNavigate: (route: string) => void }) => {
 
     try {
       const { url } = await uploadToCos(file);
-      setResumeUrl(url);
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('resume-url', url);
-      }
+      await setContentKey('resume-url', url);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -220,38 +254,19 @@ const Expertise = ({ onNavigate }: { onNavigate: (route: string) => void }) => {
   );
 };
 
+const philosophyCardBase = [
+  { title: 'panda planet', desc: 'Stripping away the unnecessary to reveal the core essence of a brand. Clarity over clutter, always.', route: 'philosophy-minimalism' },
+  { title: 'Fabrique', desc: 'Every pixel and every line must serve a reason. Design is not just how it looks, but how it functions.', route: 'philosophy-purpose' },
+  { title: 'Concord', desc: 'A relentless pursuit of detail. We believe that the smallest elements define the overall quality of the work.', route: 'philosophy-craft' },
+  { title: 'YOUVW', desc: 'Pushing boundaries by embracing new technologies while respecting the timeless principles of art.', route: 'philosophy-innovation' },
+] as Array<{ title: string; desc: string; route: string; img?: string | null }>;
+
 const Philosophy = ({ onNavigate }: { onNavigate: (route: string) => void }) => {
-  const [values, setValues] = useState(() => {
-    const base = [
-      { title: 'panda planet', desc: 'Stripping away the unnecessary to reveal the core essence of a brand. Clarity over clutter, always.', route: 'philosophy-minimalism' },
-      { title: 'Fabrique', desc: 'Every pixel and every line must serve a reason. Design is not just how it looks, but how it functions.', route: 'philosophy-purpose' },
-      { title: 'Concord', desc: 'A relentless pursuit of detail. We believe that the smallest elements define the overall quality of the work.', route: 'philosophy-craft' },
-      { title: 'YOUVW', desc: 'Pushing boundaries by embracing new technologies while respecting the timeless principles of art.', route: 'philosophy-innovation' },
-    ] as Array<{
-      title: string;
-      desc: string;
-      route: string;
-      img?: string | null;
-    }>;
-
-    if (typeof window === 'undefined') {
-      return base.map((v, i) => ({
-        ...v,
-        img: `https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2070&auto=format&fit=crop&sig=${i}`,
-      }));
-    }
-
-    return base.map((v, i) => {
-      const key = `philosophy-card-${v.title}`;
-      const stored = window.localStorage.getItem(key);
-      return {
-        ...v,
-        img:
-          stored ||
-          `https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2070&auto=format&fit=crop&sig=${i}`,
-      };
-    });
-  });
+  const { contentMap, setContentKey } = useContent();
+  const values = philosophyCardBase.map((v, i) => ({
+    ...v,
+    img: contentMap[`philosophy-card-${v.title}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`philosophy-card-${v.title}`) : null) ?? `https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2070&auto=format&fit=crop&sig=${i}`,
+  }));
 
   return (
     <section id="philosophy" className="relative min-h-screen bg-serenity-bg border-y border-serenity-text/10 overflow-hidden">
@@ -308,19 +323,7 @@ const Philosophy = ({ onNavigate }: { onNavigate: (route: string) => void }) => 
                       if (!file) return;
                       try {
                         const { url } = await uploadToCos(file);
-                        setValues((prev) =>
-                          prev.map((item, idx) => {
-                            if (idx !== i) return item;
-                            const updated = { ...item, img: url };
-                            if (typeof window !== 'undefined') {
-                              window.localStorage.setItem(
-                                `philosophy-card-${updated.title}`,
-                                url
-                              );
-                            }
-                            return updated;
-                          })
-                        );
+                        await setContentKey(`philosophy-card-${philosophyCardBase[i].title}`, url);
                       } catch (e) {
                         // eslint-disable-next-line no-console
                         console.error(e);
@@ -347,23 +350,13 @@ const processDefaultImgs = [
 ];
 
 const Process = () => {
-  const [imgs, setImgs] = useState<string[]>(() => {
-    if (typeof window === 'undefined') return processDefaultImgs;
-    return processDefaultImgs.map((fallback, i) => {
-      const stored = window.localStorage.getItem(`process-img-${i}`);
-      return stored || fallback;
-    });
-  });
+  const { contentMap, setContentKey } = useContent();
+  const imgs = processDefaultImgs.map((fallback, i) =>
+    contentMap[`process-img-${i}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`process-img-${i}`) : null) ?? fallback
+  );
 
-  const updateImg = (index: number, url: string) => {
-    setImgs((prev) => {
-      const next = [...prev];
-      next[index] = url;
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(`process-img-${index}`, url);
-      }
-      return next;
-    });
+  const updateImg = async (index: number, url: string) => {
+    await setContentKey(`process-img-${index}`, url);
   };
 
   const aspectClasses = [
@@ -572,36 +565,18 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     window.scrollTo(0, 0);
   }, []);
 
-  const [artifacts, setArtifacts] = useState(() => {
-    const base = [
-      { 
-        name: 'Swiss Airmen', 
-        type: 'Watch', 
-        desc: 'Black Carbon & Technical Polymer',
-        img: null as string | null
-      },
-      { name: 'Diamond Pendant', type: 'Jewelry', desc: '18k White Gold', img: null as string | null },
-      { name: 'Onyx Ring', type: 'Jewelry', desc: 'Matte Black Finish', img: null as string | null },
-      { name: 'Classic Timepiece', type: 'Watch', desc: 'Leather & Silver', img: null as string | null },
-    ];
-
-    if (typeof window === 'undefined') {
-      return base;
-    }
-
-    return base.map((item) => {
-      const stored = window.localStorage.getItem(`brand-identity-${item.name}`);
-      if (stored) {
-        return { ...item, img: stored };
-      }
-      return item;
-    });
-  });
-
-  const [heroVideo, setHeroVideo] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem('brand-identity-hero-video');
-  });
+  const { contentMap, setContentKey } = useContent();
+  const brandIdentityBase = [
+    { name: 'Swiss Airmen', type: 'Watch', desc: 'Black Carbon & Technical Polymer', img: null as string | null },
+    { name: 'Diamond Pendant', type: 'Jewelry', desc: '18k White Gold', img: null as string | null },
+    { name: 'Onyx Ring', type: 'Jewelry', desc: 'Matte Black Finish', img: null as string | null },
+    { name: 'Classic Timepiece', type: 'Watch', desc: 'Leather & Silver', img: null as string | null },
+  ];
+  const artifacts = brandIdentityBase.map((item) => ({
+    ...item,
+    img: (contentMap[`brand-identity-${item.name}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`brand-identity-${item.name}`) : null)) as string | null,
+  }));
+  const heroVideo = contentMap['brand-identity-hero-video'] ?? (typeof window !== 'undefined' ? window.localStorage.getItem('brand-identity-hero-video') : null) ?? null;
 
   return (
     <motion.div 
@@ -655,12 +630,7 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <div className="absolute bottom-10 right-10 z-10">
           <CosUploadPlaceholder
             label="Upload Collection Intro Video"
-            onUploaded={(url) => {
-              setHeroVideo(url);
-              if (typeof window !== 'undefined') {
-                window.localStorage.setItem('brand-identity-hero-video', url);
-              }
-            }}
+            onUploaded={(url) => setContentKey('brand-identity-hero-video', url)}
           />
         </div>
       </section>
@@ -711,21 +681,8 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                             if (!file) return;
                             try {
                               const { url } = await uploadToCos(file);
-                              setArtifacts((prev) =>
-                                prev.map((art, index) => {
-                                  if (index !== i) return art;
-                                  const updated = { ...art, img: url };
-                                  if (typeof window !== 'undefined') {
-                                    window.localStorage.setItem(
-                                      `brand-identity-${updated.name}`,
-                                      url
-                                    );
-                                  }
-                                  return updated;
-                                })
-                              );
+                              await setContentKey(`brand-identity-${artifacts[i].name}`, url);
                             } catch (e) {
-                              // 简单忽略错误，避免打断其他交互
                               // eslint-disable-next-line no-console
                               console.error(e);
                             } finally {
@@ -738,18 +695,7 @@ const BrandIdentityProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                   ) : (
                     <CosUploadPlaceholder
                       label={`${item.type} PNG / Video`}
-                      onUploaded={(url) =>
-                        setArtifacts((prev) =>
-                          prev.map((art, index) => {
-                            if (index !== i) return art;
-                            const updated = { ...art, img: url };
-                            if (typeof window !== 'undefined') {
-                              window.localStorage.setItem(`brand-identity-${updated.name}`, url);
-                            }
-                            return updated;
-                          })
-                        )
-                      }
+                      onUploaded={(url) => setContentKey(`brand-identity-${artifacts[i].name}`, url)}
                     />
                   )}
                 </div>
@@ -955,61 +901,24 @@ const StackedImageGallery = ({ images }: { images: string[] }) => {
   );
 };
 
+const artDirectionBase = [
+  { title: "ROMANO", subtitle: "AI-Generated Visual Identity", desc: "Exploring the intersection of machine learning and classical art direction. This project utilizes custom-trained models to generate a cohesive brand language that evolves in real-time.", images: ["https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=2070&auto=format&fit=crop", "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=2070&auto=format&fit=crop", "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2070&auto=format&fit=crop"], tags: ["Stable Diffusion", "Midjourney", "Art Direction"] },
+  { title: "GAOTU", subtitle: "Conceptual Architecture", desc: "A series of architectural visualizations generated through latent space exploration. The project challenges traditional notions of form and structure by leveraging AI's ability to dream up impossible geometries.", images: ["https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1964&auto=format&fit=crop", "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1964&auto=format&fit=crop", "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1964&auto=format&fit=crop"], tags: ["Generative Design", "3D Visualization", "AI Research"] },
+  { title: "BAILIAN", subtitle: "Organic Algorithms", desc: "A visual study on the simulation of natural growth patterns using recursive neural networks. This project aims to create a digital ecosystem that feels both alien and deeply familiar.", images: ["https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=1974&auto=format&fit=crop", "https://images.unsplash.com/photo-1633167606207-d840b5070fc2?q=80&w=1974&auto=format&fit=crop", "https://images.unsplash.com/photo-1614728263952-84ea256f9679?q=80&w=1974&auto=format&fit=crop"], tags: ["Algorithmic Art", "Nature Simulation", "AI Art"] },
+];
+
 const ArtDirectionProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
-  const [aiProjects, setAiProjects] = useState(() => {
-    const base = [
-    {
-      title: "ROMANO",
-      subtitle: "AI-Generated Visual Identity",
-      desc: "Exploring the intersection of machine learning and classical art direction. This project utilizes custom-trained models to generate a cohesive brand language that evolves in real-time.",
-      images: [
-        "https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=2070&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=2070&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2070&auto=format&fit=crop"
-      ],
-      tags: ["Stable Diffusion", "Midjourney", "Art Direction"]
-    },
-    {
-      title: "GAOTU",
-      subtitle: "Conceptual Architecture",
-      desc: "A series of architectural visualizations generated through latent space exploration. The project challenges traditional notions of form and structure by leveraging AI's ability to dream up impossible geometries.",
-      images: [
-        "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1964&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1964&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1964&auto=format&fit=crop"
-      ],
-      tags: ["Generative Design", "3D Visualization", "AI Research"]
-    },
-    {
-      title: "BAILIAN",
-      subtitle: "Organic Algorithms",
-      desc: "A visual study on the simulation of natural growth patterns using recursive neural networks. This project aims to create a digital ecosystem that feels both alien and deeply familiar.",
-      images: [
-        "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=1974&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1633167606207-d840b5070fc2?q=80&w=1974&auto=format&fit=crop",
-        "https://images.unsplash.com/photo-1614728263952-84ea256f9679?q=80&w=1974&auto=format&fit=crop"
-      ],
-      tags: ["Algorithmic Art", "Nature Simulation", "AI Art"]
-    }
-  ];
-
-    if (typeof window === 'undefined') {
-      return base;
-    }
-
-    return base.map((project) => ({
-      ...project,
-      images: project.images.map((img, idx) => {
-        const key = `art-direction-${project.title}-${idx}`;
-        const stored = window.localStorage.getItem(key);
-        return stored || img;
-      }),
-    }));
-  });
+  const { contentMap, setContentKey } = useContent();
+  const aiProjects = artDirectionBase.map((project) => ({
+    ...project,
+    images: project.images.map((img, idx) =>
+      contentMap[`art-direction-${project.title}-${idx}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`art-direction-${project.title}-${idx}`) : null) ?? img
+    ),
+  }));
 
   return (
     <motion.div 
@@ -1100,22 +1009,7 @@ const ArtDirectionProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     <div key={imgIndex} className="w-32">
                       <CosUploadPlaceholder
                         label={`Upload ${imgIndex + 1}`}
-                        onUploaded={(url) =>
-                          setAiProjects((prev) =>
-                            prev.map((p, pIndex) => {
-                              if (pIndex !== index) return p;
-                              const newImages = [...p.images];
-                              newImages[imgIndex] = url;
-                              if (typeof window !== 'undefined') {
-                                window.localStorage.setItem(
-                                  `art-direction-${p.title}-${imgIndex}`,
-                                  url
-                                );
-                              }
-                              return { ...p, images: newImages };
-                            })
-                          )
-                        }
+                        onUploaded={(url) => setContentKey(`art-direction-${aiProjects[index].title}-${imgIndex}`, url)}
                       />
                     </div>
                   ))}
@@ -1131,57 +1025,25 @@ const ArtDirectionProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
 // --- Motion Design Project Page Component ---
 
+const motionDesignBase = [
+  { title: "Kinetic Vessel", desc: "An exploration of fluid dynamics in glass-like polymers.", img: "https://images.unsplash.com/photo-1633167606207-d840b5070fc2?q=80&w=2000&auto=format&fit=crop" },
+  { title: "Neural Fabric", desc: "Simulating organic growth patterns in synthetic textiles.", img: "https://images.unsplash.com/photo-1614728263952-84ea256f9679?q=80&w=2000&auto=format&fit=crop" },
+  { title: "Prismatic Core", desc: "Light refraction studies on crystalline structures.", img: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2000&auto=format&fit=crop" },
+  { title: "Obsidian Flow", desc: "High-viscosity liquid simulations on dark surfaces.", img: "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2000&auto=format&fit=crop" },
+  { title: "Aetherial Form", desc: "Weightless structures suspended in a digital void.", img: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2000&auto=format&fit=crop" },
+  { title: "Carbon Rhythm", desc: "Rhythmic patterns in woven carbon fiber composites.", img: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2000&auto=format&fit=crop" },
+];
+
 const MotionDesignProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
-  const [experimentalProducts, setExperimentalProducts] = useState(() => {
-    const base = [
-      {
-        title: "Kinetic Vessel",
-        desc: "An exploration of fluid dynamics in glass-like polymers.",
-        img: "https://images.unsplash.com/photo-1633167606207-d840b5070fc2?q=80&w=2000&auto=format&fit=crop"
-      },
-      {
-        title: "Neural Fabric",
-        desc: "Simulating organic growth patterns in synthetic textiles.",
-        img: "https://images.unsplash.com/photo-1614728263952-84ea256f9679?q=80&w=2000&auto=format&fit=crop"
-      },
-      {
-        title: "Prismatic Core",
-        desc: "Light refraction studies on crystalline structures.",
-        img: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2000&auto=format&fit=crop"
-      },
-      {
-        title: "Obsidian Flow",
-        desc: "High-viscosity liquid simulations on dark surfaces.",
-        img: "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2000&auto=format&fit=crop"
-      },
-      {
-        title: "Aetherial Form",
-        desc: "Weightless structures suspended in a digital void.",
-        img: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2000&auto=format&fit=crop"
-      },
-      {
-        title: "Carbon Rhythm",
-        desc: "Rhythmic patterns in woven carbon fiber composites.",
-        img: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2000&auto=format&fit=crop"
-      }
-    ];
-
-    if (typeof window === 'undefined') {
-      return base;
-    }
-
-    return base.map((item) => {
-      const stored = window.localStorage.getItem(`motion-design-${item.title}`);
-      if (stored) {
-        return { ...item, img: stored };
-      }
-      return item;
-    });
-  });
+  const { contentMap, setContentKey } = useContent();
+  const experimentalProducts = motionDesignBase.map((item) => ({
+    ...item,
+    img: contentMap[`motion-design-${item.title}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`motion-design-${item.title}`) : null) ?? item.img,
+  }));
 
   return (
     <motion.div 
@@ -1261,19 +1123,7 @@ const MotionDesignProject: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         if (!file) return;
                         try {
                           const { url } = await uploadToCos(file);
-                          setExperimentalProducts((prev) =>
-                            prev.map((p, i) => {
-                              if (i !== index) return p;
-                              const updated = { ...p, img: url };
-                              if (typeof window !== 'undefined') {
-                                window.localStorage.setItem(
-                                  `motion-design-${updated.title}`,
-                                  url
-                                );
-                              }
-                              return updated;
-                            })
-                          );
+                          await setContentKey(`motion-design-${experimentalProducts[index].title}`, url);
                         } catch (e) {
                           // eslint-disable-next-line no-console
                           console.error(e);
@@ -1313,25 +1163,12 @@ const PhilosophyDetail: React.FC<{
     window.scrollTo(0, 0);
   }, []);
 
-  const [heroImage, setHeroImage] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(`philosophy-hero-${title}`);
-  });
-
-  const [localArtifacts, setLocalArtifacts] = useState(() => {
-    if (typeof window === 'undefined') {
-      return artifacts;
-    }
-
-    return artifacts.map((item) => {
-      const key = `philosophy-${title}-${item.name}`;
-      const stored = window.localStorage.getItem(key);
-      if (stored) {
-        return { ...item, img: stored };
-      }
-      return item;
-    });
-  });
+  const { contentMap, setContentKey } = useContent();
+  const heroImage = contentMap[`philosophy-hero-${title}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`philosophy-hero-${title}`) : null) ?? null;
+  const localArtifacts = artifacts.map((item) => ({
+    ...item,
+    img: (contentMap[`philosophy-${title}-${item.name}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`philosophy-${title}-${item.name}`) : null) ?? item.img) as string | null,
+  }));
 
   return (
     <motion.div 
@@ -1400,13 +1237,7 @@ const PhilosophyDetail: React.FC<{
                       if (!file) return;
                       try {
                         const { url } = await uploadToCos(file);
-                        setHeroImage(url);
-                        if (typeof window !== 'undefined') {
-                          window.localStorage.setItem(
-                            `philosophy-hero-${title}`,
-                            url
-                          );
-                        }
+                        await setContentKey(`philosophy-hero-${title}`, url);
                       } catch (e) {
                         // eslint-disable-next-line no-console
                         console.error(e);
@@ -1421,15 +1252,7 @@ const PhilosophyDetail: React.FC<{
               <div className="w-full h-full flex items-center justify-center">
                 <CosUploadPlaceholder
                   label="Upload Philosophy Hero Image"
-                  onUploaded={(url) => {
-                    setHeroImage(url);
-                    if (typeof window !== 'undefined') {
-                      window.localStorage.setItem(
-                        `philosophy-hero-${title}`,
-                        url
-                      );
-                    }
-                  }}
+                  onUploaded={(url) => setContentKey(`philosophy-hero-${title}`, url)}
                 />
               </div>
             )}
@@ -1470,21 +1293,7 @@ const PhilosophyDetail: React.FC<{
                   ) : (
                     <CosUploadPlaceholder
                       label={`${item.type} Visual`}
-                      onUploaded={(url) =>
-                        setLocalArtifacts((prev) =>
-                          prev.map((art, index) => {
-                            if (index !== i) return art;
-                            const updated = { ...art, img: url };
-                            if (typeof window !== 'undefined') {
-                              window.localStorage.setItem(
-                                `philosophy-${title}-${updated.name}`,
-                                url
-                              );
-                            }
-                            return updated;
-                          })
-                        )
-                      }
+                      onUploaded={(url) => setContentKey(`philosophy-${title}-${localArtifacts[i].name}`, url)}
                     />
                   )}
                 </div>
@@ -1514,13 +1323,10 @@ const PhilosophyCraft: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     "https://assets.mixkit.co/videos/preview/mixkit-hands-of-a-craftsman-working-on-a-leather-piece-4285-large.mp4"
   ];
 
-  const [videos, setVideos] = useState<string[]>(() => {
-    if (typeof window === 'undefined') return defaultVideos;
-    return defaultVideos.map((fallback, i) => {
-      const stored = window.localStorage.getItem(`concord-video-${i}`);
-      return stored || fallback;
-    });
-  });
+  const { contentMap, setContentKey } = useContent();
+  const videos = defaultVideos.map((fallback, i) =>
+    contentMap[`concord-video-${i}`] ?? (typeof window !== 'undefined' ? window.localStorage.getItem(`concord-video-${i}`) : null) ?? fallback
+  );
 
   const videoLabels = ["Micro-Mechanical Detail", "Tactile Materiality"];
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([]);
@@ -1609,16 +1415,7 @@ const PhilosophyCraft: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 <div className="absolute inset-0 flex items-center justify-center">
                   <CosUploadPlaceholder
                     label={`Upload Video ${i + 1}`}
-                    onUploaded={(newUrl) => {
-                      setVideos((prev) => {
-                        const next = [...prev];
-                        next[i] = newUrl;
-                        if (typeof window !== 'undefined') {
-                          window.localStorage.setItem(`concord-video-${i}`, newUrl);
-                        }
-                        return next;
-                      });
-                    }}
+                    onUploaded={(newUrl) => setContentKey(`concord-video-${i}`, newUrl)}
                   />
                 </div>
               )}
@@ -1645,14 +1442,7 @@ const PhilosophyCraft: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     if (!file) return;
                     try {
                       const { url: newUrl } = await uploadToCos(file);
-                      setVideos((prev) => {
-                        const next = [...prev];
-                        next[i] = newUrl;
-                        if (typeof window !== 'undefined') {
-                          window.localStorage.setItem(`concord-video-${i}`, newUrl);
-                        }
-                        return next;
-                      });
+                      await setContentKey(`concord-video-${i}`, newUrl);
                     } catch (e) {
                       // eslint-disable-next-line no-console
                       console.error(e);
@@ -1676,6 +1466,7 @@ export default function App() {
   const [currentRoute, setCurrentRoute] = useState<'home' | 'brand-identity' | 'digital-experience' | 'art-direction' | 'motion-design' | 'philosophy-minimalism' | 'philosophy-purpose' | 'philosophy-innovation' | 'philosophy-craft'>('home');
 
   return (
+    <ContentStoreProvider>
     <AnimatePresence mode="wait">
       {currentRoute === 'home' ? (
         <motion.div 
@@ -1746,5 +1537,6 @@ export default function App() {
         />
       )}
     </AnimatePresence>
+    </ContentStoreProvider>
   );
 }
